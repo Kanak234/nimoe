@@ -10,24 +10,26 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-      - name: Audit repositories
+      - name: Read-only repository inventory
         env:
           GH_TOKEN: ${{ secrets.PORTFOLIO_GH_TOKEN }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GH_OWNER: Kanak234
-          NEUTRON_API_KEY: ${{ secrets.API }}
-          NEUTRON_API_URL: ${{ vars.NEUTRON_API_URL }}
-          NEUTRON_MODEL: ${{ vars.NEUTRON_MODEL }}
-        run: python scripts/audit.py
-      - name: Upload audit reports
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: portfolio-audit
-          path: reports/
-          if-no-files-found: warn
-          retention-days: 30
+        run: |
+          python3 - <<'PY'
+          import json, os, urllib.request
+          token = os.environ.get("GH_TOKEN") or os.environ["GITHUB_TOKEN"]
+          req = urllib.request.Request(
+            "https://api.github.com/user/repos?per_page=100&affiliation=owner",
+            headers={"Authorization": "Bearer " + token,
+                     "Accept": "application/vnd.github+json",
+                     "User-Agent": "nimoe-audit"})
+          with urllib.request.urlopen(req, timeout=30) as response:
+            repositories = json.load(response)
+          own = [r for r in repositories if r.get("owner", {}).get("login", "").lower() == "kanak234"]
+          print(json.dumps({"repository_count_first_page": len(own),
+                            "repositories": [{"name": r["full_name"],
+                              "private": r["private"],
+                              "archived": r["archived"],
+                              "stars": r["stargazers_count"]} for r in own]}, indent=2))
+          print("Read-only inventory complete. Additional pages and full audit require the dedicated token and expanded workflow.")
+          PY
