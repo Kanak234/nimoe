@@ -15,6 +15,10 @@ jobs:
           GH_TOKEN: ${{ secrets.PORTFOLIO_GH_TOKEN }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::error::Missing PORTFOLIO_GH_TOKEN secret. Add a GitHub token with repository read permissions under Settings > Secrets and variables > Actions."
+            exit 1
+          fi
           python3 - <<'PY'
           import json, os, urllib.request
           token = os.environ.get("GH_TOKEN") or os.environ["GITHUB_TOKEN"]
