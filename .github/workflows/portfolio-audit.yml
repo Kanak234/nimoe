@@ -8,32 +8,63 @@ permissions:
 jobs:
   audit:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     steps:
-      - name: Read-only repository inventory
+      - name: Validate portfolio credentials
         env:
           GH_TOKEN: ${{ secrets.PORTFOLIO_GH_TOKEN }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           if [ -z "$GH_TOKEN" ]; then
-            echo "::error::Missing PORTFOLIO_GH_TOKEN secret. Add a GitHub token with repository read permissions under Settings > Secrets and variables > Actions."
+            echo "::error::Missing PORTFOLIO_GH_TOKEN. Create a fine-grained token with read access to the repositories you want audited."
             exit 1
           fi
+      - name: Fetch audited script from this repository
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          REF: ${{ github.sha }}
+        run: |
+          mkdir -p scripts
           python3 - <<'PY'
-          import json, os, urllib.request
-          token = os.environ.get("GH_TOKEN") or os.environ["GITHUB_TOKEN"]
-          req = urllib.request.Request(
-            "https://api.github.com/user/repos?per_page=100&affiliation=owner",
-            headers={"Authorization": "Bearer " + token,
-                     "Accept": "application/vnd.github+json",
-                     "User-Agent": "nimoe-audit"})
+          import base64, json, os, urllib.parse, urllib.request
+          repo = os.environ["REPO"]
+          ref = urllib.parse.quote(os.environ["REF"])
+          url = f"https://api.github.com/repos/{repo}/contents/scripts/audit.py?ref={ref}"
+          req = urllib.request.Request(url, headers={
+              "Authorization": "Bearer " + os.environ["GITHUB_TOKEN"],
+              "Accept": "application/vnd.github+json",
+              "User-Agent": "nimoe-audit"
+          })
           with urllib.request.urlopen(req, timeout=30) as response:
-            repositories = json.load(response)
-          own = [r for r in repositories if r.get("owner", {}).get("login", "").lower() == "kanak234"]
-          print(json.dumps({"repository_count_first_page": len(own),
-                            "repositories": [{"name": r["full_name"],
-                              "private": r["private"],
-                              "archived": r["archived"],
-                              "stars": r["stargazers_count"]} for r in own]}, indent=2))
-          print("Read-only inventory complete. Additional pages and full audit require the dedicated token and expanded workflow.")
+              data = json.load(response)
+          with open("scripts/audit.py", "wb") as handle:
+              handle.write(base64.b64decode(data["content"]))
+          PY
+      - name: Run full read-only audit and optional Neutron summary
+        env:
+          GH_TOKEN: ${{ secrets.PORTFOLIO_GH_TOKEN }}
+          GH_OWNER: Kanak234
+          NEUTRON_API_KEY: ${{ secrets.API }}
+          NEUTRON_API_URL: ${{ vars.NEUTRON_API_URL }}
+          NEUTRON_MODEL: ${{ vars.NEUTRON_MODEL }}
+        run: |
+          python3 scripts/audit.py
+          python3 - <<'PY'
+          import json, os
+          with open("reports/audit.json") as file:
+              report = json.load(file)
+          with open("reports/neutron.json") as file:
+              neutron = json.load(file)
+          summary = [
+              "## Portfolio audit",
+              f"Repositories scanned: **{report['repository_count']}**",
+              f"Neutron analysis: **{neutron.get('status', 'unknown')}**",
+              "",
+              "| Repository | Findings |",
+              "|---|---:|",
+          ]
+          for item in report["repositories"]:
+              summary.append(f"| {item['repository']} | {len(item.get('findings', [])) if 'error' not in item else 'Error'} |")
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as file:
+              file.write("\n".join(summary) + "\n")
           PY
